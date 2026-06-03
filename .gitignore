@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Local environment
+.env
+.env.*
+
+# Raw and generated medical data
+outputs/
+data/
+datasets/
+raw/
+*.xlsx
+*.xls
+*.csv
+*.jsonl
+
+# Allow repository metadata/docs, but keep clinical data out.
+!docs/**/*.md
+!README.md
+!requirements.txt
+
+# Superseded exploratory scripts
+medical_record_pipeline_stages_1_3.py
+stage1_contextual_temporal_alignment.py
+stage1_data_loading.py
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
