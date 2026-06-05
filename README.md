@@ -13,7 +13,7 @@ artifacts are intentionally excluded from version control.
 The project currently implements four stages:
 
 | Stage | Name | Method | Main output |
-| ----- | --- | --- | --- |
+| --- | --- | --- | --- |
 | Stage 1A | XLSX merge | Rule-based pandas merge | One patient-level CSV |
 | Stage 1B | Document temporal sorting | Deterministic date/phase sorting | `Sorted_Timeline` |
 | Stage 2 | Core fact extraction and verification | Multi-agent Ollama loop | Verified row-isolated clinical facts |
@@ -62,7 +62,7 @@ flowchart TD
     N -->|NEEDS_REVISION + feedback| L
     O --> P[Stage 2 fact CSV]
 
-    Q[prof_samples/{professor}_Samples.csv] --> R[Stage 3: style prompt extraction]
+    Q["prof_samples/*_Samples.csv"] --> R[Stage 3: style prompt extraction]
     R --> S[Professor_Styles_extracted.xlsx]
     S --> T[Stage 4: professor-style note generation]
     P --> T
