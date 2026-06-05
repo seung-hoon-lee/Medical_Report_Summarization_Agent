@@ -13,7 +13,7 @@ artifacts are intentionally excluded from version control.
 The project currently implements four stages:
 
 | Stage | Name | Method | Main output |
-| ---- | --- | --- | --- |
+| ----- | --- | --- | --- |
 | Stage 1A | XLSX merge | Rule-based pandas merge | One patient-level CSV |
 | Stage 1B | Document temporal sorting | Deterministic date/phase sorting | `Sorted_Timeline` |
 | Stage 2 | Core fact extraction and verification | Multi-agent Ollama loop | Verified row-isolated clinical facts |
