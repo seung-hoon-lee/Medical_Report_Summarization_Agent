@@ -40,6 +40,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -169,11 +170,17 @@ def stable_json(data: Any) -> str:
 
 
 def professor_name_from_path(path: Path) -> str:
-    name = path.stem
-    for suffix in ("_Samples", "_samples", "-Samples", "-samples"):
+    # Normalize Korean filenames created on macOS/Linux so professor names match
+    # the Professor_ID values used by Stage 4.
+    name = unicodedata.normalize("NFC", path.stem).strip()
+    for suffix in (
+        "_Samples", "_samples", "-Samples", "-samples",
+        "_Sample", "_sample", "-Sample", "-sample",
+    ):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
-    return name.strip()
+            break
+    return unicodedata.normalize("NFC", name.strip())
 
 
 def choose_column(df: pd.DataFrame, candidates: tuple[str, ...], required: bool = False, role: str = "") -> str | None:
@@ -336,10 +343,12 @@ def build_reference_examples(
 
 def truncate_middle(text: str, max_chars: int) -> str:
     text = clean_scalar(text)
-    if max_chars <= 0 or len(text) <= max_chars:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
         return text
     keep_left = max_chars // 2
-    keep_right = max_chars - keep_left - 40
+    keep_right = max(0, max_chars - keep_left - 40)
     return text[:keep_left].rstrip() + "\n...[TRUNCATED]...\n" + text[-keep_right:].lstrip()
 
 
@@ -411,7 +420,9 @@ You must produce JSON with exactly these keys:
 
 Requirements for style_prompt:
 - English only.
-- Around {target_chars} characters if possible.
+- Around {target_chars} characters if possible; do not exceed {target_chars + 400} characters.
+- Keep every JSON list short: maximum 5 items per list.
+- Keep style_summary, length_policy, and unknown_policy to one sentence each.
 - Must be directly usable as the professor-specific style_prompt.
 - Must include:
   1. Professor style target
@@ -463,7 +474,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    raise ValueError(f"Could not parse JSON object from model output:\n{text[:1000]}")
+    raise ValueError(f"Could not parse JSON object from model output. The output is often truncated by num_predict; increase --num_predict or reduce --max_examples/--target_style_chars. Output head:\n{text[:1000]}")
 
 
 class OllamaStyleExtractor:
@@ -771,9 +782,15 @@ def write_outputs(results: list[dict[str, Any]], output_xlsx: Path, audit_jsonl:
 def find_sample_files(input_dir: Path) -> list[Path]:
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
-    files = sorted(input_dir.glob("*_Samples.csv"))
-    if not files:
-        files = sorted(input_dir.glob("*_samples.csv"))
+
+    patterns = ("*_Samples.csv", "*_samples.csv", "*_Sample.csv", "*_sample.csv")
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in patterns:
+        for path in sorted(input_dir.glob(pattern)):
+            if path not in seen:
+                files.append(path)
+                seen.add(path)
     if not files:
         files = sorted(input_dir.glob("*.csv"))
     if not files:
@@ -791,14 +808,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--ollama_host", default=os.environ.get("OLLAMA_HOST"))
     parser.add_argument("--ollama_num_ctx", type=int, default=16384)
-    parser.add_argument("--num_predict", type=int, default=2600)
+    parser.add_argument("--num_predict", type=int, default=6000)
     parser.add_argument("--seed", type=int, default=1225)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry_sleep", type=float, default=2.0)
-    parser.add_argument("--max_examples", type=int, default=18)
-    parser.add_argument("--max_output_chars", type=int, default=1200)
-    parser.add_argument("--max_input_chars", type=int, default=900)
-    parser.add_argument("--target_style_chars", type=int, default=1600)
+    parser.add_argument("--max_examples", type=int, default=12)
+    parser.add_argument("--max_output_chars", type=int, default=800)
+    parser.add_argument("--max_input_chars", type=int, default=300)
+    parser.add_argument("--target_style_chars", type=int, default=1100)
     parser.add_argument("--professor", help="Optional exact professor name to process.")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--continue_on_error", action="store_true")
@@ -869,6 +886,7 @@ python extract_professor_styles_ollama.py \
   --audit_jsonl Professor_Styles_extracted_audit.jsonl \
   --model qwen3.5:9b \
   --ollama_num_ctx 16384 \
-  --num_predict 2600
+  --num_predict 6000 \
+  --continue_on_error
 
 """
