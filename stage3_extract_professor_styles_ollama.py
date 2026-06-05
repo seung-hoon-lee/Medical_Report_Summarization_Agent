@@ -474,7 +474,181 @@ def extract_json_object(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    raise ValueError(f"Could not parse JSON object from model output. The output is often truncated by num_predict; increase --num_predict or reduce --max_examples/--target_style_chars. Output head:\n{text[:1000]}")
+    raise ValueError(
+        "Could not parse JSON object from model output. "
+        "The model output is likely incomplete or malformed."
+        f" Output head:\n{text[:1000]}"
+    )
+
+
+def build_json_repair_messages(
+    professor: str,
+    raw_output: str,
+    stats: NoteStats,
+    target_chars: int,
+) -> list[dict[str, str]]:
+    """Ask the model to convert a partial/malformed style extraction into short valid JSON."""
+    system_prompt = (
+        "You repair malformed JSON from a clinical style extraction model. "
+        "Return valid JSON only. No markdown. No explanation. No <think> block. "
+        "Keep the result short."
+    )
+    user_prompt = f"""
+Repair or reconstruct the JSON for professor {professor}.
+
+The previous model output may be truncated:
+{truncate_middle(raw_output, 2500)}
+
+Use these statistics if needed:
+- median lines: {stats.median_lines:.1f}
+- mean lines: {stats.mean_lines:.1f}
+- median chars: {stats.median_chars:.1f}
+- abbreviation rate: {format_percent(stats.abbreviation_rate)}
+- section header rate: {format_percent(stats.section_header_rate)}
+- bullet/list rate: {format_percent(stats.bullet_rate)}
+- common abbreviations: {stats.common_abbreviations or "none"}
+
+Return JSON with exactly these keys:
+{{
+  "professor": "{professor}",
+  "style_summary": "one sentence",
+  "length_policy": "one sentence",
+  "content_priority": ["max 4 short items"],
+  "strong_omit_rules": ["max 4 short items"],
+  "format_rules": ["max 4 short items"],
+  "abbreviation_rules": ["max 4 short items"],
+  "unknown_policy": "one sentence",
+  "style_prompt": "final reusable prompt, <= {target_chars} characters"
+}}
+
+The style_prompt must include:
+- Professor style target
+- Style
+- Length
+- Content priority, not mandatory sections
+- Strong omit rule
+- Format / notation
+- Mini example pattern with placeholders only
+- The sentence: Do not summarize the operative report.
+- The sentence: Omit factual but low-priority details if not typical of this professor.
+""".strip()
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def deterministic_style_json(professor: str, stats: NoteStats) -> dict[str, Any]:
+    """Last-resort non-LLM style profile so one bad professor never blocks the batch."""
+    if stats.median_lines <= 4:
+        length = "Usually 2-4 non-empty lines; compress aggressively."
+        mini = "[status or diagnosis]\n[date] [operation/procedure]"
+    elif stats.median_lines <= 8:
+        length = "Usually 4-8 non-empty lines; keep a compact timeline/list style."
+        mini = "[status]\n[date] [operation/procedure]\n#1. [key diagnosis/history if typical]"
+    else:
+        length = "Often a longer compact timeline/problem-list note, but still avoid narrative expansion."
+        mini = "[status]\n[date] [operation/procedure]\n#1. [core condition]\n- s/p [key prior treatment/date]"
+
+    header_rule = (
+        "Use the professor's observed section header style when present."
+        if stats.section_header_rate >= 0.5
+        else "Do not add section headers unless clearly required by the source style."
+    )
+    bullet_rule = (
+        "Use short bullet/problem-list lines when the reference style uses them."
+        if stats.bullet_rate >= 0.3 or stats.numbered_rate >= 0.3
+        else "Avoid expanding into many bullets unless the reference style requires them."
+    )
+    abbrev_rule = (
+        "Preserve abbreviations and do not expand them into long phrases."
+        if stats.abbreviation_rate >= 0.4
+        else "Use concise medical shorthand only when clearly supported."
+    )
+
+    style_prompt = f"""Professor style target: {professor}
+
+Style:
+- Compact outpatient-note style based on the professor's reference outputs.
+- Prefer note-like fragments over explanatory narrative.
+- Do not summarize the operative report.
+
+Length:
+- {length}
+- Match the reference output compactness, not the source record richness.
+
+Content priority, not mandatory sections:
+1. Main diagnosis/R/O diagnosis or visit status if typical.
+2. Main operation/procedure with date if supported.
+3. Key timeline/problem-list items only if typical for this professor.
+4. Short postop/follow-up/status phrase if supported.
+
+Strong omit rule:
+- Omit factual but low-priority details if not typical of this professor.
+- Omit routine operative technical steps, anesthesia, EBL, drain/chest tube/closure/repair details, routine negative findings, discharge course, and incidental comorbidities unless the reference style consistently includes them.
+- Do not fill every possible category.
+
+Format / notation:
+- {header_rule}
+- {bullet_rule}
+- {abbrev_rule}
+- Preserve source dates and laterality exactly.
+
+Mini example pattern:
+{mini}"""
+    return {
+        "professor": professor,
+        "style_summary": "Deterministic fallback style profile generated because Ollama did not return valid JSON.",
+        "length_policy": length,
+        "content_priority": [
+            "main diagnosis/R/O diagnosis or visit status",
+            "main operation/procedure with date",
+            "key timeline/problem-list items only if typical",
+            "short postop/follow-up/status phrase",
+        ],
+        "strong_omit_rules": [
+            "do not summarize operative report",
+            "omit factual but low-priority details",
+            "omit routine technical/discharge/negative details",
+        ],
+        "format_rules": [header_rule, bullet_rule, "preserve dates and laterality exactly"],
+        "abbreviation_rules": [abbrev_rule],
+        "unknown_policy": "Omit missing fields unless the style/schema explicitly requires an unknown placeholder.",
+        "style_prompt": style_prompt,
+    }
+
+
+def parse_or_repair_style_json(
+    raw_output: str,
+    professor: str,
+    stats: NoteStats,
+    extractor: "OllamaStyleExtractor",
+    target_chars: int,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    """Parse JSON; if malformed, run one repair call; if still bad, use deterministic fallback."""
+    try:
+        return extract_json_object(raw_output), raw_output, {"parse_mode": "direct"}
+    except Exception as direct_exc:  # noqa: BLE001
+        repair_messages = build_json_repair_messages(
+            professor=professor,
+            raw_output=raw_output,
+            stats=stats,
+            target_chars=target_chars,
+        )
+        try:
+            repaired_output, repair_metadata = extractor.chat(repair_messages)
+            data = extract_json_object(repaired_output)
+            repair_metadata = dict(repair_metadata)
+            repair_metadata["parse_mode"] = "repair"
+            repair_metadata["direct_parse_error"] = str(direct_exc)
+            return data, repaired_output, repair_metadata
+        except Exception as repair_exc:  # noqa: BLE001
+            data = deterministic_style_json(professor, stats)
+            return data, stable_json(data), {
+                "parse_mode": "deterministic_fallback",
+                "direct_parse_error": str(direct_exc),
+                "repair_error": str(repair_exc),
+            }
 
 
 class OllamaStyleExtractor:
@@ -682,8 +856,17 @@ Mini example pattern:
         raw_output = stable_json(style_json)
     else:
         raw_output, metadata = extractor.chat(messages)
-        style_json = extract_json_object(raw_output)
+        style_json, parsed_output, parse_metadata = parse_or_repair_style_json(
+            raw_output=raw_output,
+            professor=professor,
+            stats=stats,
+            extractor=extractor,
+            target_chars=args.target_style_chars,
+        )
         style_json = repair_style_prompt_if_needed(style_json, professor, stats)
+        if parsed_output != raw_output:
+            raw_output = parsed_output
+        metadata = {**metadata, **parse_metadata}
 
     warnings = validate_style_json(style_json, professor)
 
@@ -808,14 +991,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--ollama_host", default=os.environ.get("OLLAMA_HOST"))
     parser.add_argument("--ollama_num_ctx", type=int, default=16384)
-    parser.add_argument("--num_predict", type=int, default=6000)
+    parser.add_argument("--num_predict", type=int, default=8000)
     parser.add_argument("--seed", type=int, default=1225)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry_sleep", type=float, default=2.0)
-    parser.add_argument("--max_examples", type=int, default=12)
-    parser.add_argument("--max_output_chars", type=int, default=800)
-    parser.add_argument("--max_input_chars", type=int, default=300)
-    parser.add_argument("--target_style_chars", type=int, default=1100)
+    parser.add_argument("--max_examples", type=int, default=8)
+    parser.add_argument("--max_output_chars", type=int, default=600)
+    parser.add_argument("--max_input_chars", type=int, default=0)
+    parser.add_argument("--target_style_chars", type=int, default=850)
     parser.add_argument("--professor", help="Optional exact professor name to process.")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--continue_on_error", action="store_true")
@@ -886,7 +1069,6 @@ python extract_professor_styles_ollama.py \
   --audit_jsonl Professor_Styles_extracted_audit.jsonl \
   --model qwen3.5:9b \
   --ollama_num_ctx 16384 \
-  --num_predict 6000 \
-  --continue_on_error
+  --num_predict 2600
 
 """
