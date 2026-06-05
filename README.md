@@ -62,7 +62,7 @@ flowchart TD
     N -->|NEEDS_REVISION + feedback| L
     O --> P[Stage 2 fact CSV]
 
-    Q[prof_samples/{professor}_Samples.csv] --> R[Stage 3: style prompt extraction]
+    Q["prof_samples/*_Samples.csv"] --> R[Stage 3: style prompt extraction]
     R --> S[Professor_Styles_extracted.xlsx]
     S --> T[Stage 4: professor-style note generation]
     P --> T
