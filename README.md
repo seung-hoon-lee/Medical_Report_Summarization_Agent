@@ -181,8 +181,8 @@ The expected filename pattern is:
 
 ```text
 prof_samples/
-├── 강창현_Samples.csv
-├── 한원식_Samples.csv
+├── prof.A_Samples.csv
+├── prof.B_Samples.csv
 └── ...
 ```
 
@@ -204,8 +204,8 @@ Smoke test for one professor:
 python stage3_extract_professor_styles_ollama.py \
   --input_dir prof_samples \
   --professor 강창현 \
-  --output_xlsx outputs/Professor_Styles_강창현_test.xlsx \
-  --audit_jsonl outputs/Professor_Styles_강창현_test_audit.jsonl \
+  --output_xlsx outputs/Professor_Styles_prof.A_test.xlsx \
+  --audit_jsonl outputs/Professor_Styles_prof.A_test_audit.jsonl \
   --model qwen3.5:9b \
   --ollama_num_ctx 16384 \
   --num_predict 2600
