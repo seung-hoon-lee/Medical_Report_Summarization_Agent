@@ -203,7 +203,7 @@ Smoke test for one professor:
 ```bash
 python stage3_extract_professor_styles_ollama.py \
   --input_dir prof_samples \
-  --professor 강창현 \
+  --professor prof.A \
   --output_xlsx outputs/Professor_Styles_prof.A_test.xlsx \
   --audit_jsonl outputs/Professor_Styles_prof.A_test_audit.jsonl \
   --model qwen3.5:9b \
