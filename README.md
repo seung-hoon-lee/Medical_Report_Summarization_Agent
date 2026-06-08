@@ -1,8 +1,8 @@
 # Medical Report Summarization Agent
 
-Streamlit-based clinical document generation service and CLI pipeline for
-document ordering, fact extraction, few-shot reference-style extraction, and
-fact-grounded medical note generation with local Ollama models.
+Clinical document ordering, fact extraction, few-shot reference-style
+extraction, and fact-grounded medical note generation pipeline with local
+Ollama models.
 
 This repository contains code and documentation only. Raw clinical records,
 intermediate CSVs, generated outputs, style workbooks, audit logs, and model
@@ -10,18 +10,15 @@ artifacts are intentionally excluded from version control.
 
 ## What This Pipeline Does
 
-The current framework supports both a Streamlit web console and stage-by-stage
-CLI execution. The default web workflow keeps Stage 1 and Stage 2 unchanged,
-then runs a unified Stage 3/4 agent that learns the output style from uploaded
-reference examples.
+The current framework keeps Stage 1 and Stage 2 unchanged, then runs a unified
+Stage 3/4 agent that learns the output style from reference examples.
 
 | Stage | Name | Method | Main output |
 | --- | --- | --- | --- |
 | Stage 1A | XLSX merge | Rule-based pandas merge | One patient-level CSV |
 | Stage 1B | Document temporal sorting | Deterministic date/phase sorting | `Sorted_Timeline` |
 | Stage 2 | Core fact extraction and verification | Multi-agent Ollama loop | Verified row-isolated clinical facts |
-| Stage 3/4 | Few-shot style extraction and final note generation | Uploaded reference outputs + local Ollama generation | `generated_notes.csv`, audit JSONL, style cache JSONL |
-| Web | Upload and orchestration layer | Streamlit + `web_pipeline.py` | Per-run workspace under `outputs/web_runs/<run_id>/` |
+| Stage 3/4 | Few-shot style extraction and final note generation | Reference outputs + local Ollama generation | `generated_notes.csv`, audit JSONL, style cache JSONL |
 
 Stage 1 is deterministic and does not call an LLM. Stage 2 uses two local
 Ollama agents:
@@ -31,7 +28,7 @@ Ollama agents:
   feedback for recursive correction.
 
 The active Stage 3/4 path is `stage3_4_fewshot_professor_style_agents.py`. It
-uses Stage 2 facts plus approximately five uploaded reference output examples.
+uses Stage 2 facts plus approximately five reference output examples.
 Each reference row is treated as an independent style example; the agent extracts
 a reusable style profile, then generates one final note per selected input row
 using only that row's Stage 2 facts.
@@ -60,13 +57,8 @@ flowchart TD
     N -->|NEEDS_REVISION + feedback| L
     O --> P[Stage 2 fact CSV]
 
-    W[Streamlit web console] --> X[Uploaded input documents]
-    W --> Y[Uploaded reference output samples]
-    X --> Z[Per-run workspace]
-    Y --> Z
-    Z --> D
-    P --> R[Unified Stage 3/4 few-shot style + generation]
-    Y --> R
+    Q[Reference output CSV] --> R[Unified Stage 3/4 few-shot style + generation]
+    P --> R
     R --> U[generated_notes.csv]
     R --> V[generated_notes_audit.jsonl]
     R --> S[fewshot_professor_style_prompts.jsonl]
@@ -82,10 +74,7 @@ flowchart TD
 ├── stage3_4_fewshot_professor_style_agents.py
 ├── stage3_extract_professor_styles_ollama.py
 ├── stage4_generate_professor_style_notes.py
-├── streamlit_app.py
-├── web_pipeline.py
 ├── requirements.txt
-├── .streamlit/
 ├── docs/
 │   ├── pipeline.md
 │   ├── commands.md
@@ -112,8 +101,8 @@ cd /path/to/Medical_Report_Summarization_Agent
 python -m pip install -r requirements.txt
 ```
 
-Install and run Ollama separately, then pull the default models used by the web
-console:
+Install and run Ollama separately, then pull the default models used by the CLI
+pipeline:
 
 ```bash
 ollama pull qwen3.6:35b
@@ -127,77 +116,6 @@ ollama list
 ```
 
 ## Quick Start
-
-### Streamlit web console
-
-```bash
-cd /root/seunghoon/project
-python -m streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
-```
-
-Open the app from the same machine or forwarded port:
-
-```text
-http://127.0.0.1:8501/
-```
-
-If port `8501` is already in use, either open the existing server or stop it:
-
-```bash
-pkill -f "streamlit run streamlit_app.py"
-python -m streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
-```
-
-Or run on another port:
-
-```bash
-python -m streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8502
-```
-
-The web console stores each run under `outputs/web_runs/<run_id>/`. Raw uploads,
-normalized CSVs, model outputs, audit files, and generated notes are isolated per
-run and are intentionally ignored by git.
-
-Typical web workflow:
-
-1. Open `문서 업로드`.
-2. Upload one or more input documents. Table uploads should include an input
-   text column such as `Input`, `input`, or `의료기록지`.
-3. Upload reference output samples for the desired output style. For an Excel
-   file such as `references.xlsx`, each row is treated as one independent
-   reference example. A `No.` column is used as the reference id, and a
-   `References` or `Output` column is used as the reference output text.
-4. Open `파이프라인 실행`.
-5. Run Stage 1, then Stage 2, then Stage 3/4.
-6. Open `결과` and enable `Show generated note text` to inspect the
-   `generated_note` column from `outputs/generated_notes.csv`.
-
-Important web settings:
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `Extractor model` | `qwen3.5:9b` | Stage 2 fact extractor |
-| `Verifier model` | `qwen3.5:9b` | Stage 2 fact verifier |
-| `Style model` | `qwen3.6:35b` | Stage 3/4 style extraction model |
-| `Generation model` | `qwen3.6:35b` | Stage 3/4 final note generation model |
-| `Stage 3/4 backend` | `ollama` | Real generation backend. `dry_run` creates placeholders only |
-| `Strict validation` | enabled | Adds warnings for suspicious unsupported output content |
-
-The final generated note is stored in:
-
-```text
-outputs/web_runs/<run_id>/outputs/generated_notes.csv
-```
-
-Its main text column is:
-
-```text
-generated_note
-```
-
-`validation_status=needs_review` means the run completed, but the validator
-found content that should be reviewed before use. `validation_status=dry_run`
-means the output is a placeholder and not an LLM-generated note.
 
 ### Stage 1A: merge raw XLSX files
 
@@ -273,15 +191,14 @@ It writes:
 - `--audit_jsonl`: per-row generation audit and validation metadata.
 - `--style_cache_jsonl`: extracted few-shot style profile and reference ids.
 
-The reference CSV can be produced by the Streamlit upload flow. For manual CLI
-use, create a CSV like this:
+Create a reference CSV like this:
 
 ```csv
 Professor_ID,수술ID,Input,Output
-web_professor,1,,"<|section_start|>Description <- 소견<|section_end|>
+example_professor,1,,"<|section_start|>Description <- 소견<|section_end|>
 17.3.30 Robot Mckeown 3FLND
 d/t Eso ca UI 30cm cT1bN0M0"
-web_professor,2,,"<second reference output>"
+example_professor,2,,"<second reference output>"
 ```
 
 Each row is one independent reference style example. If all reference examples
@@ -299,7 +216,7 @@ Smoke test using Stage 2 facts and five reference examples:
 ```bash
 python stage3_4_fewshot_professor_style_agents.py \
   --facts_csv outputs/stage2_verified_facts.csv \
-  --reference_csv outputs/web_runs/<run_id>/reference_examples.csv \
+  --reference_csv outputs/reference_examples.csv \
   --output_csv outputs/generated_notes.csv \
   --audit_jsonl outputs/generated_notes_audit.jsonl \
   --style_cache_jsonl outputs/fewshot_professor_style_prompts.jsonl \
@@ -315,7 +232,7 @@ Separate models can be used for style extraction and note generation:
 ```bash
 python stage3_4_fewshot_professor_style_agents.py \
   --facts_csv outputs/stage2_verified_facts.csv \
-  --reference_csv outputs/web_runs/<run_id>/reference_examples.csv \
+  --reference_csv outputs/reference_examples.csv \
   --output_csv outputs/generated_notes.csv \
   --audit_jsonl outputs/generated_notes_audit.jsonl \
   --style_cache_jsonl outputs/fewshot_professor_style_prompts.jsonl \
@@ -330,7 +247,7 @@ Dry run without LLM generation:
 ```bash
 python stage3_4_fewshot_professor_style_agents.py \
   --facts_csv outputs/stage2_verified_facts.csv \
-  --reference_csv outputs/web_runs/<run_id>/reference_examples.csv \
+  --reference_csv outputs/reference_examples.csv \
   --output_csv outputs/generated_notes_dryrun.csv \
   --audit_jsonl outputs/generated_notes_dryrun_audit.jsonl \
   --style_cache_jsonl outputs/fewshot_professor_style_prompts_dryrun.jsonl \
