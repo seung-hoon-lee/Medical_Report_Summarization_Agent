@@ -111,16 +111,15 @@ Hard rules:
 6. Do not infer diagnosis, surgery history, medications, dates, pathology, treatment plan, recurrence, metastasis, or follow-up schedule unless explicitly present in CURRENT_ROW_FACTS.
 7. Do not complete missing medical information based on common clinical patterns.
 8. Preserve uncertainty exactly.
-9. The task is not to summarize all available facts. The task is to write the final outpatient note in the target professor's style.
-10. Include only facts that are both explicitly supported and stylistically likely to appear in the final outpatient note.
+9. The task is not to summarize all available facts. The task is to write the requested target clinical document in the target professor's style.
+10. Include only facts that are both explicitly supported and stylistically likely to appear in the requested target document.
 11. Omit factual but low-priority details when the professor's style is compact.""",
-    "compact_specialty_rule_pack": """General compact outpatient-note rule:
+    "compact_specialty_rule_pack": """General compact clinical-document rule:
 - Match the professor's reference output compactness, not the input record richness.
-- Do not summarize operative reports.
-- Do not write discharge summaries.
-- Do not expand abbreviations if the professor's real notes use abbreviations.
-- Remove low-priority operative details first: approach, ports/trocars, dissection, ligation, anastomosis device, drain/chest tube, repair, EBL, anesthesia, closure, routine negative findings, discharge course, long PMHx, incidental comorbidities.
-- Never omit core outpatient-note anchors if explicitly supported and typical for the professor: main diagnosis/R/O diagnosis, main operation/procedure, operation/procedure date, short postop/follow-up/status phrase.""",
+- Do not expand abbreviations if the professor's real documents use abbreviations.
+- Include operative or discharge details only when the requested target document and reference style call for them.
+- Remove low-priority technical details first: approach minutiae, ports/trocars, dissection, ligation, devices, drains/tubes, repair, EBL, anesthesia, closure, routine negative findings, long PMHx, and incidental comorbidities.
+- Never omit core target-document anchors if explicitly supported and typical for the professor: main diagnosis/R/O diagnosis, main operation/procedure, clinically central dates, status, and plan.""",
     "recommended_runtime_prompt_layout": """Use the generated Sheet1 style_prompt with the global safety prompt and CURRENT_ROW_FACTS.
 Do not put all professor prompts in the same generation call.
 Use only the style prompt for the matched professor.""",
@@ -357,10 +356,18 @@ def build_style_extraction_messages(
     stats: NoteStats,
     examples: list[dict[str, str]],
     target_chars: int,
+    output_type: str = "outpatient note",
 ) -> list[dict[str, str]]:
+    target_document = clean_scalar(output_type) or "outpatient note"
+    operative_target = "수술" in target_document or "operative" in target_document.lower()
+    operative_requirement = (
+        "Must explicitly say: include operative content only at the level shown by the reference samples; do not over-expand low-priority technical details."
+        if operative_target
+        else "Must explicitly say: do not summarize the operative report."
+    )
     system_prompt = """You are an expert clinical documentation style analyst.
 
-You extract reusable professor-specific outpatient-note style prompts from real reference outpatient notes.
+You extract reusable professor-specific clinical-document style prompts from real reference output documents.
 
 Critical objective:
 - Do NOT merely describe surface wording.
@@ -378,10 +385,10 @@ Safety:
 - Return valid JSON only. No markdown, no explanation, no <think> block."""
 
     user_prompt = f"""
-Analyze the real outpatient-note samples for professor: {professor}
+Analyze the real {target_document} samples for professor: {professor}
 
-The notes are real reference OUTPUT notes, not source operative records.
-Extract a compact but strict style prompt for generating future notes in this professor's style.
+The documents are real reference OUTPUT documents, not source operative records.
+Extract a compact but strict style prompt for generating future {target_document} documents in this professor's style.
 
 Observed note statistics:
 - number of valid output notes: {stats.n_valid_outputs}
@@ -426,13 +433,14 @@ Requirements for style_prompt:
 - Must be directly usable as the professor-specific style_prompt.
 - Must include:
   1. Professor style target
-  2. Style
-  3. Length
-  4. Content priority, not mandatory sections
-  5. Strong omit rule
-  6. Format / notation
-  7. Mini example pattern with placeholders only
-- Must explicitly say: do not summarize the operative report.
+  2. Target output document type: {target_document}
+  3. Style
+  4. Length
+  5. Content priority, not mandatory sections
+  6. Strong omit rule
+  7. Format / notation
+  8. Mini example pattern with placeholders only
+- {operative_requirement}
 - Must explicitly say: omit factual but low-priority details if not typical of this professor.
 - Must explicitly say: preserve core anchors if explicitly supported and typical for the professor:
   main diagnosis/R/O diagnosis, main operation/procedure, date, short postop/follow-up/status phrase.
@@ -569,7 +577,7 @@ def deterministic_style_json(professor: str, stats: NoteStats) -> dict[str, Any]
     style_prompt = f"""Professor style target: {professor}
 
 Style:
-- Compact outpatient-note style based on the professor's reference outputs.
+- Compact clinical-document style based on the professor's reference outputs.
 - Prefer note-like fragments over explanatory narrative.
 - Do not summarize the operative report.
 
@@ -773,10 +781,10 @@ def repair_style_prompt_if_needed(data: dict[str, Any], professor: str, stats: N
     if "do not summarize the operative report" not in lower:
         additions.append("- Do not summarize the operative report.")
     if "factual but low-priority" not in lower:
-        additions.append("- Omit factual but low-priority details when they are not typical of this professor's final outpatient notes.")
+        additions.append("- Omit factual but low-priority details when they are not typical of this professor's final target documents.")
     if "core outpatient-note anchors" not in lower and "core anchors" not in lower:
         additions.append(
-            "- Preserve core outpatient-note anchors if explicitly supported and typical for this professor: main diagnosis/R/O diagnosis, main operation/procedure, date, and short postop/follow-up/status phrase."
+            "- Preserve core target-document anchors if explicitly supported and typical for this professor: main diagnosis/R/O diagnosis, main operation/procedure, central date, status, and plan."
         )
     if "do not expand abbreviations" not in lower and stats.abbreviation_rate >= 0.4:
         additions.append("- Do not expand abbreviations when this professor's real notes use abbreviations.")
@@ -816,6 +824,7 @@ def process_one_file(path: Path, extractor: OllamaStyleExtractor, args: argparse
         stats=stats,
         examples=examples,
         target_chars=args.target_style_chars,
+        output_type=args.output_type,
     )
 
     if args.dry_run:
@@ -829,6 +838,7 @@ def process_one_file(path: Path, extractor: OllamaStyleExtractor, args: argparse
             "abbreviation_rules": ["DRY RUN ONLY"],
             "unknown_policy": "DRY RUN ONLY",
             "style_prompt": f"""Professor style target: {professor}
+Target output document type: {args.output_type}
 
 Style:
 - DRY RUN ONLY.
@@ -999,6 +1009,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_output_chars", type=int, default=600)
     parser.add_argument("--max_input_chars", type=int, default=0)
     parser.add_argument("--target_style_chars", type=int, default=850)
+    parser.add_argument("--output_type", default="outpatient note")
     parser.add_argument("--professor", help="Optional exact professor name to process.")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--continue_on_error", action="store_true")

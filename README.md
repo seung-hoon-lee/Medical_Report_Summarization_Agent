@@ -120,6 +120,17 @@ ollama list
 
 ## Quick Start
 
+### Streamlit web console
+
+```bash
+streamlit run streamlit_app.py --server.address 127.0.0.1 --server.port 8501
+```
+
+The web console stores each uploaded run under `outputs/web_runs/<run_id>/`,
+keeps raw uploads and generated artifacts isolated per run, and can run a
+no-LLM demo path using Stage 1, Stage 3 dry-run style extraction, and Stage 4
+placeholder generation.
+
 ### Stage 1A: merge raw XLSX files
 
 ```bash
