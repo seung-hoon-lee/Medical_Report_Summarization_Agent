@@ -105,8 +105,30 @@ def split_source_documents(text: str) -> list[tuple[int | None, str, str]]:
         raw_text = text[start:end].strip()
         source_index = int(match.group(1))
         document_type = normalize_document_type(match.group(2))
+        if is_empty_source_document(raw_text):
+            continue
         documents.append((source_index, document_type, raw_text))
     return documents
+
+
+def source_document_body(raw_text: str) -> str:
+    """Return the text inside a source document's double-brace body."""
+
+    marker_index = raw_text.find("{{")
+    if marker_index < 0:
+        return raw_text.strip()
+
+    body = raw_text[marker_index + 2 :]
+    closing_index = body.rfind("}}")
+    if closing_index >= 0 and not body[closing_index + 2 :].strip():
+        body = body[:closing_index]
+    return body.strip()
+
+
+def is_empty_source_document(raw_text: str) -> bool:
+    """Return whether a source document has no meaningful body text."""
+
+    return not source_document_body(raw_text)
 
 
 def normalize_document_type(value: str) -> str:

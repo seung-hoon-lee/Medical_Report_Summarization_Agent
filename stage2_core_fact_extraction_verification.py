@@ -63,6 +63,14 @@ Do not include hidden reasoning, chain-of-thought, or analysis prose.
 Return JSON only."""
 
 
+JSON_REPAIR_SYSTEM_PROMPT = """You repair malformed JSON from a clinical extraction agent.
+Disable thinking. Do not output thinking. /no_think
+Return one valid JSON object only.
+Preserve the original keys, values, and clinical wording as much as possible.
+Fix only JSON syntax problems such as broken quoting, stray commas, truncated strings, or missing closing brackets.
+Do not add new clinical facts."""
+
+
 EXTRACT_PROMPT = """Task:
 Extract core medical facts from this temporally sorted source-document chunk.
 
@@ -192,6 +200,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry-sleep", type=float, default=5.0)
     parser.add_argument("--max-iterations", type=int, default=2)
+    parser.add_argument(
+        "--agent1-only",
+        action="store_true",
+        help="Run only the first Agent 1 extraction pass and skip Agent 2 verification.",
+    )
+    parser.add_argument(
+        "--raw-input-whole",
+        action="store_true",
+        help="Use the raw Input column as one whole chunk instead of splitting Sorted_Timeline.",
+    )
     parser.add_argument("--coverage-threshold", type=float, default=0.85)
     parser.add_argument("--evidence-threshold", type=float, default=0.95)
     parser.add_argument("--start-index", type=int, default=0)
@@ -199,6 +217,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-every", type=int, default=10, help="Write partial CSV output every N processed rows. Use 0 to disable.")
     parser.add_argument("--skip-readable-report", action="store_true", help="Skip writing the markdown sidecar report.")
     return parser.parse_args()
+
+
+def stage2_mode_name(agent1_only: bool, raw_input_whole: bool) -> str:
+    if raw_input_whole and agent1_only:
+        return "raw_input_agent1_only"
+    if raw_input_whole:
+        return "raw_input_iterative_verified"
+    if agent1_only:
+        return "agent1_only"
+    return "iterative_verified"
 
 
 class OllamaJsonClient:
@@ -268,6 +296,8 @@ class OllamaJsonClient:
                 content = response.get("message", {}).get("content", "")
                 parsed = parse_json_object(content)
                 if parsed is None:
+                    parsed = self.repair_json_with_model(model, content)
+                if parsed is None:
                     raise RuntimeError(f"Model did not return parseable JSON: {content[:500]}")
                 return parsed
             except Exception as exc:
@@ -276,25 +306,106 @@ class OllamaJsonClient:
                     time.sleep(self.retry_sleep * (attempt + 1))
         raise RuntimeError(f"Ollama JSON call failed after retries: {last_error}")
 
+    def repair_json_with_model(self, model: str, malformed_json: str) -> dict[str, Any] | None:
+        """Ask the model to repair malformed JSON syntax without changing content."""
+
+        if not str(malformed_json).strip():
+            return None
+        try:
+            response = self.client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": JSON_REPAIR_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": "Repair this malformed JSON object and return JSON only:\n<<<\n"
+                        + str(malformed_json)
+                        + "\n>>>",
+                    },
+                ],
+                think=False,
+                format="json",
+                options={
+                    "temperature": 0.0,
+                    "num_ctx": self.num_ctx,
+                    "num_predict": self.num_predict,
+                },
+            )
+            return parse_json_object(response.get("message", {}).get("content", ""))
+        except Exception:
+            return None
+
 
 def parse_json_object(text: str) -> dict[str, Any] | None:
     """Parse a JSON object from model output."""
 
     cleaned = re.sub(r"<unused\d+>", "", str(text)).strip()
-    try:
-        value = json.loads(cleaned)
-        return value if isinstance(value, dict) else None
-    except json.JSONDecodeError:
-        pass
+    parsed = parse_strict_or_repaired_json_object(cleaned)
+    if parsed is not None:
+        return parsed
 
     match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
     if not match:
         return None
+    return parse_strict_or_repaired_json_object(match.group(0))
+
+
+def parse_strict_or_repaired_json_object(text: str) -> dict[str, Any] | None:
+    """Parse JSON strictly, then try optional local JSON repair if available."""
+
     try:
-        value = json.loads(match.group(0))
+        value = json.loads(text)
         return value if isinstance(value, dict) else None
     except json.JSONDecodeError:
+        pass
+
+    repaired_text = repair_stray_string_continuations(text)
+    if repaired_text != text:
+        try:
+            value = json.loads(repaired_text)
+            return value if isinstance(value, dict) else None
+        except json.JSONDecodeError:
+            text = repaired_text
+
+    try:
+        from json_repair import repair_json
+    except ModuleNotFoundError:
         return None
+
+    try:
+        repaired = repair_json(text, return_objects=True)
+    except TypeError:
+        try:
+            repaired = json.loads(repair_json(text))
+        except Exception:
+            return None
+    except Exception:
+        return None
+    return repaired if isinstance(repaired, dict) else None
+
+
+def repair_stray_string_continuations(text: str) -> str:
+    """Merge stray string fragments after a JSON string value into that value."""
+
+    pattern = re.compile(
+        r'("(?P<key>[A-Za-z_][^"]*)"\s*:\s*"(?P<value>(?:[^"\\]|\\.)*)")'
+        r'\s*,\s*"(?P<continuation>(?:[^"\\]|\\.)*)"\s*,(?=\s*"[A-Za-z_][^"]*"\s*:)',
+        flags=re.DOTALL,
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group("key")
+        value = match.group("value").strip()
+        continuation = match.group("continuation").strip()
+        merged = re.sub(r"\s+", " ", f"{value} {continuation}").strip()
+        return json.dumps(key) + ": " + json.dumps(merged, ensure_ascii=False) + ","
+
+    previous = text
+    while True:
+        repaired = pattern.sub(replace, previous)
+        if repaired == previous:
+            return repaired
+        previous = repaired
 
 
 def load_input_csv(path: Path) -> pd.DataFrame:
@@ -793,6 +904,7 @@ def run_chunk_loop(
     max_iterations: int,
     coverage_threshold: float,
     evidence_threshold: float,
+    agent1_only: bool,
 ) -> dict[str, Any]:
     """Run extraction-verification loop for one document chunk."""
 
@@ -821,6 +933,28 @@ def run_chunk_loop(
         final_facts = normalize_facts_payload(extracted, document_type)
         final_facts = apply_deterministic_fact_completion(document_type, chunk, final_facts)
         final_facts = prune_non_core_or_prompt_leak_facts(final_facts, chunk)
+
+        if agent1_only:
+            final_verification = {
+                "verdict": "SKIPPED_AGENT1_ONLY",
+                "coverage_score": 0.0,
+                "evidence_support_score": 0.0,
+                "unsupported_facts": [],
+                "missing_facts": [],
+                "contradictions": [],
+                "date_errors": [],
+                "clinical_accuracy_issues": [],
+                "feedback_for_extractor": "Agent 2 verifier skipped for Agent1-only ablation.",
+            }
+            iterations.append(
+                {
+                    "iteration": iteration,
+                    "facts": final_facts,
+                    "verification": final_verification,
+                    "approved": False,
+                }
+            )
+            break
 
         verify_prompt = VERIFY_PROMPT.format(
             professor_id=professor_id,
@@ -856,11 +990,44 @@ def run_chunk_loop(
 
     return {
         "document_type": document_type,
+        "chunk_status": "success",
         "approved": approved,
         "iterations_used": len(iterations),
         "final_facts": final_facts,
         "final_verification": final_verification,
         "iterations": iterations,
+    }
+
+
+def chunk_error_result(document_type: str, exc: Exception) -> dict[str, Any]:
+    """Return a recoverable per-chunk error payload."""
+
+    error_text = str(exc)
+    return {
+        "document_type": document_type,
+        "chunk_status": "error",
+        "chunk_error": error_text,
+        "approved": False,
+        "iterations_used": 0,
+        "final_facts": {
+            "source_document": document_type,
+            "facts": [],
+            "uncertain_or_conflicting": [],
+        },
+        "final_verification": {
+            "verdict": "CHUNK_ERROR",
+            "coverage_score": 0.0,
+            "evidence_support_score": 0.0,
+            "unsupported_facts": [],
+            "missing_facts": [],
+            "contradictions": [],
+            "date_errors": [],
+            "clinical_accuracy_issues": [
+                {"issue": "chunk_processing_error", "detail": error_text[:500]}
+            ],
+            "feedback_for_extractor": "Chunk failed after retries; other chunks were processed.",
+        },
+        "iterations": [],
     }
 
 
@@ -1037,29 +1204,43 @@ def run_patient_stage2(
     max_iterations: int,
     coverage_threshold: float,
     evidence_threshold: float,
+    agent1_only: bool,
+    raw_input_whole: bool,
 ) -> dict[str, Any]:
     """Run Stage 2 over all document chunks for one patient row."""
 
-    documents = split_source_documents(str(row["Sorted_Timeline"]))
+    if raw_input_whole:
+        raw_input = str(row["Input"]).strip()
+        documents = [(None, "Raw Input", raw_input)] if raw_input else []
+    else:
+        documents = split_source_documents(str(row["Sorted_Timeline"]))
     chunk_results: list[dict[str, Any]] = []
     for _, document_type, chunk in documents:
         tqdm.write(f"[INFO] Stage2 chunk: {document_type}")
-        chunk_results.append(
-            run_chunk_loop(
-                client=client,
-                row=row,
-                document_type=document_type,
-                chunk=chunk,
-                extractor_model=extractor_model,
-                verifier_model=verifier_model,
-                max_iterations=max_iterations,
-                coverage_threshold=coverage_threshold,
-                evidence_threshold=evidence_threshold,
+        try:
+            chunk_results.append(
+                run_chunk_loop(
+                    client=client,
+                    row=row,
+                    document_type=document_type,
+                    chunk=chunk,
+                    extractor_model=extractor_model,
+                    verifier_model=verifier_model,
+                    max_iterations=max_iterations,
+                    coverage_threshold=coverage_threshold,
+                    evidence_threshold=evidence_threshold,
+                    agent1_only=agent1_only,
+                )
             )
-        )
+        except Exception as exc:
+            tqdm.write(f"[ERROR] Chunk failed ({document_type}): {exc}")
+            chunk_results.append(chunk_error_result(document_type, exc))
 
+    chunk_errors = sum(1 for result in chunk_results if result.get("chunk_status") == "error")
     chunk_lookup = {document_type: chunk for _, document_type, chunk in documents}
     for result in chunk_results:
+        if result.get("chunk_status") == "error":
+            continue
         document_type = str(result.get("document_type") or "")
         final_facts = result.get("final_facts", {})
         if isinstance(final_facts, dict):
@@ -1076,14 +1257,16 @@ def run_patient_stage2(
                 fact = {**fact, "source_document": result.get("document_type")}
             all_facts.append(fact)
 
-    approved = all(bool(result.get("approved")) for result in chunk_results)
+    approved = bool(chunk_results) and chunk_errors == 0 and all(bool(result.get("approved")) for result in chunk_results)
     return {
+        "mode": stage2_mode_name(agent1_only, raw_input_whole),
         "chunks": chunk_results,
         "all_facts": all_facts,
         "approved": approved,
         "coverage_score": average_score(chunk_results, "coverage_score"),
         "evidence_support_score": average_score(chunk_results, "evidence_support_score"),
         "total_iterations": sum(int(result.get("iterations_used", 0)) for result in chunk_results),
+        "chunk_error_count": chunk_errors,
         "unresolved_issues": collect_unresolved_issues(chunk_results),
     }
 
@@ -1137,7 +1320,8 @@ def main() -> None:
     print(f"[INFO] Output CSV: {args.output_csv}", flush=True)
     print(f"[INFO] Selected patients: {len(indices)}", flush=True)
     print(f"[INFO] Extractor model: {args.extractor_model}", flush=True)
-    print(f"[INFO] Verifier model: {args.verifier_model}", flush=True)
+    print(f"[INFO] Verifier model: {'SKIPPED (Agent1-only)' if args.agent1_only else args.verifier_model}", flush=True)
+    print(f"[INFO] Stage2 mode: {stage2_mode_name(args.agent1_only, args.raw_input_whole)}", flush=True)
 
     client = OllamaJsonClient(
         host=args.ollama_host,
@@ -1148,7 +1332,8 @@ def main() -> None:
         retries=args.retries,
         retry_sleep=args.retry_sleep,
     )
-    client.assert_models_available([args.extractor_model, args.verifier_model])
+    required_models = [args.extractor_model] if args.agent1_only else [args.extractor_model, args.verifier_model]
+    client.assert_models_available(required_models)
 
     output_rows: list[dict[str, Any]] = []
     progress = tqdm(indices, total=len(indices), desc="Stage2 patients", unit="patient")
@@ -1166,6 +1351,8 @@ def main() -> None:
                 max_iterations=args.max_iterations,
                 coverage_threshold=args.coverage_threshold,
                 evidence_threshold=args.evidence_threshold,
+                agent1_only=args.agent1_only,
+                raw_input_whole=args.raw_input_whole,
             )
             base_row.update(
                 {
@@ -1177,8 +1364,10 @@ def main() -> None:
                     "Verification_Report": json.dumps(
                         {
                             "approved": result["approved"],
+                            "mode": result["mode"],
                             "coverage_score": result["coverage_score"],
                             "evidence_support_score": result["evidence_support_score"],
+                            "chunk_error_count": result["chunk_error_count"],
                             "unresolved_issues": result["unresolved_issues"],
                         },
                         ensure_ascii=False,
@@ -1189,8 +1378,10 @@ def main() -> None:
                     "Stage2_Coverage_Score": result["coverage_score"],
                     "Stage2_Evidence_Support_Score": result["evidence_support_score"],
                     "Stage2_Total_Iterations": result["total_iterations"],
+                    "Stage2_Chunk_Error_Count": result["chunk_error_count"],
+                    "Stage2_Mode": result["mode"],
                     "Stage2_Extractor_Model": args.extractor_model,
-                    "Stage2_Verifier_Model": args.verifier_model,
+                    "Stage2_Verifier_Model": "SKIPPED_AGENT1_ONLY" if args.agent1_only else args.verifier_model,
                     "Stage2_Status": "success",
                     "Stage2_Error": "",
                     "Stage2_Processed_At": pd.Timestamp.now("UTC").isoformat(),
@@ -1208,8 +1399,10 @@ def main() -> None:
                     "Stage2_Coverage_Score": 0.0,
                     "Stage2_Evidence_Support_Score": 0.0,
                     "Stage2_Total_Iterations": 0,
+                    "Stage2_Chunk_Error_Count": 0,
+                    "Stage2_Mode": stage2_mode_name(args.agent1_only, args.raw_input_whole),
                     "Stage2_Extractor_Model": args.extractor_model,
-                    "Stage2_Verifier_Model": args.verifier_model,
+                    "Stage2_Verifier_Model": "SKIPPED_AGENT1_ONLY" if args.agent1_only else args.verifier_model,
                     "Stage2_Status": "error",
                     "Stage2_Error": str(exc),
                     "Stage2_Processed_At": pd.Timestamp.now("UTC").isoformat(),
