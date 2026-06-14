@@ -8,6 +8,7 @@ This repository contains a Python clinical document pipeline plus supporting doc
 - `pipeline/stage2_temporal_document_sort.py`: splits and orders source documents into `Sorted_Timeline`.
 - `pipeline/stage3_core_fact_extraction_verification.py`: runs Ollama-based extraction and verification.
 - `pipeline/stage4_5_fewshot_professor_style_agents.py`: extracts reference style and generates final notes.
+- `web/`: Streamlit UI, web adapters, web theme config, and web screenshot assets.
 - `docs/`: pipeline, command, and data-safety reference material.
 - `outputs/`, `data/`, `raw/`, generated CSV/JSON/Markdown reports, and model artifacts are local-only and ignored.
 

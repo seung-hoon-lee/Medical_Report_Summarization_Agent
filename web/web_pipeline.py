@@ -27,7 +27,8 @@ from xml.etree import ElementTree
 import pandas as pd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+WEB_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = WEB_DIR.parent
 WEB_RUNS_ROOT = PROJECT_ROOT / "outputs" / "web_runs"
 INPUT_CSV_NAME = "uploaded_patient_inputs.csv"
 STYLE_SAMPLE_SUFFIX = "_Samples.csv"
@@ -110,8 +111,6 @@ class RunPaths:
     stage1_csv: Path
     stage1_json: Path
     stage2_csv: Path
-    stage3_xlsx: Path
-    stage3_audit_jsonl: Path
     reference_csv: Path
     style_cache_jsonl: Path
     stage4_csv: Path
@@ -208,8 +207,6 @@ def create_run_paths(label: str) -> RunPaths:
         stage1_csv=root / "outputs" / "stage1_sorted_timeline.csv",
         stage1_json=root / "outputs" / "stage1_sort_metadata.json",
         stage2_csv=root / "outputs" / "stage2_verified_facts.csv",
-        stage3_xlsx=root / "outputs" / "Professor_Styles_extracted.xlsx",
-        stage3_audit_jsonl=root / "outputs" / "Professor_Styles_extracted_audit.jsonl",
         reference_csv=root / "reference_examples.csv",
         style_cache_jsonl=root / "outputs" / "fewshot_professor_style_prompts.jsonl",
         stage4_csv=root / "outputs" / "generated_notes.csv",
@@ -668,85 +665,6 @@ def run_stage2(
     return run_subprocess(command)
 
 
-def run_stage3(
-    paths: RunPaths,
-    *,
-    model: str,
-    dry_run: bool,
-    max_examples: int,
-    target_style_chars: int,
-    output_type: str,
-    ollama_host: str | None = None,
-) -> CommandResult:
-    command = python_command(
-        "stage3_extract_professor_styles_ollama.py",
-        "--input_dir",
-        str(paths.prof_samples_dir),
-        "--output_xlsx",
-        str(paths.stage3_xlsx),
-        "--audit_jsonl",
-        str(paths.stage3_audit_jsonl),
-        "--model",
-        model,
-        "--max_examples",
-        str(max_examples),
-        "--target_style_chars",
-        str(target_style_chars),
-        "--output_type",
-        output_type,
-        "--continue_on_error",
-    )
-    if dry_run:
-        command.append("--dry_run")
-    if ollama_host:
-        command.extend(["--ollama_host", ollama_host])
-    return run_subprocess(command)
-
-
-def run_stage4(
-    paths: RunPaths,
-    *,
-    facts_csv: Path,
-    backend: str,
-    model: str,
-    output_type: str,
-    max_rows: int | None,
-    strict_validation: bool,
-    skip_unmatched: bool,
-    save_prompts: bool,
-    ollama_host: str | None = None,
-) -> CommandResult:
-    command = python_command(
-        "stage4_generate_professor_style_notes.py",
-        "--facts_csv",
-        str(facts_csv),
-        "--styles_xlsx",
-        str(paths.stage3_xlsx),
-        "--output_csv",
-        str(paths.stage4_csv),
-        "--audit_jsonl",
-        str(paths.stage4_audit_jsonl),
-        "--backend",
-        backend,
-        "--model",
-        model,
-        "--output_type",
-        output_type,
-        "--no_progress",
-    )
-    if max_rows is not None:
-        command.extend(["--max_rows", str(max_rows)])
-    if strict_validation:
-        command.append("--strict_validation")
-    if skip_unmatched:
-        command.append("--skip_unmatched")
-    if save_prompts:
-        command.append("--save_prompts")
-    if ollama_host:
-        command.extend(["--ollama_host", ollama_host])
-    return run_subprocess(command)
-
-
 def run_stage34(
     paths: RunPaths,
     *,
@@ -811,8 +729,6 @@ def existing_artifacts(paths: RunPaths) -> list[Path]:
         paths.stage1_csv,
         paths.stage1_json,
         paths.stage2_csv,
-        paths.stage3_xlsx,
-        paths.stage3_audit_jsonl,
         paths.reference_csv,
         paths.style_cache_jsonl,
         paths.stage4_csv,
