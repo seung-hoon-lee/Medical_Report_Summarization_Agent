@@ -10,6 +10,8 @@ artifacts are intentionally excluded from version control.
 
 ## What This Pipeline Does
 
+![Medical report summarization pipeline overview](mainfigure.png)
+
 The current framework keeps Stage 1 and Stage 2 unchanged, then runs a unified
 Stage 3/4 agent that learns the output style from reference examples.
 
