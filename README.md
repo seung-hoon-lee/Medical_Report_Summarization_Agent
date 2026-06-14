@@ -92,6 +92,23 @@ Useful optional check:
 ollama list
 ```
 
+## Web Interface
+
+The Streamlit web UI lets users upload input documents and up to five reference
+output examples, then run the end-to-end pipeline from document organization to
+outpatient-note generation.
+
+![Medical Report Studio web interface](docs/web_interface.png)
+
+Run the web app:
+
+```bash
+python -m streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+Open `http://localhost:8501` on the same machine, or
+`http://<server-ip>:8501` from another machine that can reach the server.
+
 ## Quick Start
 
 ### Stage 1: merge raw XLSX files
