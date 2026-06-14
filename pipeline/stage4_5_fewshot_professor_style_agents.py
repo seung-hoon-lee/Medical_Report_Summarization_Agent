@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Few-shot professor-style prompt agent + fact-grounded outpatient-note agent.
+Stage 4/5: few-shot style extraction and fact-grounded outpatient-note generation.
 
-This script keeps the original Stage 3/4 files intact and adds a dynamic
+This script keeps the original split style/generation files intact and adds a dynamic
 workflow:
 
 1. StylePromptAgent
@@ -1491,7 +1491,7 @@ if __name__ == "__main__":
 
 
 """
-python stage3_4_fewshot_professor_style_agents.py \
+python pipeline/stage4_5_fewshot_professor_style_agents.py \
   --model qwen3.6:35b \
   --sample_count 5 \
   --output_csv outputs/fewshot_professor_style_outpatient_notes.csv \

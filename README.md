@@ -12,70 +12,45 @@ artifacts are intentionally excluded from version control.
 
 ![Medical report summarization pipeline overview](mainfigure.png)
 
-The current framework keeps Stage 1 and Stage 2 unchanged, then runs a unified
-Stage 3/4 agent that learns the output style from reference examples.
+The current framework runs deterministic preprocessing first, then uses local
+Ollama agents for verified fact extraction and reference-style note generation.
 
 | Stage | Name | Method | Main output |
 | --- | --- | --- | --- |
-| Stage 1A | XLSX merge | Rule-based pandas merge | One patient-level CSV |
-| Stage 1B | Document temporal sorting | Deterministic date/phase sorting | `Sorted_Timeline` |
-| Stage 2 | Core fact extraction and verification | Multi-agent Ollama loop | Verified row-isolated clinical facts |
-| Stage 3/4 | Few-shot style extraction and final note generation | Reference outputs + local Ollama generation | `generated_notes.csv`, audit JSONL, style cache JSONL |
+| Stage 1 | XLSX merge | Rule-based pandas merge | One patient-level CSV |
+| Stage 2 | Document temporal sorting | Deterministic date/phase sorting | `Sorted_Timeline` |
+| Stage 3 | Core fact extraction and verification | Multi-agent Ollama loop | Verified row-isolated clinical facts |
+| Stage 4/5 | Few-shot style extraction and final note generation | Reference outputs + local Ollama generation | `generated_notes.csv`, audit JSONL, style cache JSONL |
 
-Stage 1 is deterministic and does not call an LLM. Stage 2 uses two local
-Ollama agents:
+Stage 1 and Stage 2 are deterministic and do not call an LLM. Stage 3 uses two
+local Ollama agents:
 
 - Agent 1: extracts clinically important facts from each document chunk.
 - Agent 2: verifies extracted facts against the original chunk and sends
   feedback for recursive correction.
 
-The active Stage 3/4 path is `stage3_4_fewshot_professor_style_agents.py`. It
-uses Stage 2 facts plus approximately five reference output examples.
+The active Stage 4/5 path is
+`pipeline/stage4_5_fewshot_professor_style_agents.py`. It uses Stage 3 facts
+plus approximately five reference output examples.
 Each reference row is treated as an independent style example; the agent extracts
 a reusable style profile, then generates one final note per selected input row
-using only that row's Stage 2 facts.
-
-## Architecture
-
-```mermaid
-flowchart TD
-    A[Raw professor XLSX files] --> B[Stage 1A: merge XLSX files]
-    B --> C[Grouped patient CSV]
-    C --> D[Stage 1B: split source documents]
-    D --> E[Document-level temporal sorting]
-    E --> F[Sorted_Timeline CSV]
-    F --> G{For each patient row}
-    G --> H[Initial Consultation Note]
-    G --> I[Preoperative Outpatient Note]
-    G --> J[Operative Report]
-    G --> K[Discharge Summary]
-    H --> L[Stage 2 Agent 1: extraction]
-    I --> L
-    J --> L
-    K --> L
-    L --> M[Deterministic clinical guardrails]
-    M --> N[Stage 2 Agent 2: verification]
-    N -->|PASS| O[Verified row-isolated facts]
-    N -->|NEEDS_REVISION + feedback| L
-    O --> P[Stage 2 fact CSV]
-
-    Q[Reference output CSV] --> R[Unified Stage 3/4 few-shot style + generation]
-    P --> R
-    R --> U[generated_notes.csv]
-    R --> V[generated_notes_audit.jsonl]
-    R --> S[fewshot_professor_style_prompts.jsonl]
-```
+using only that row's Stage 3 facts.
 
 ## Repository Layout
 
 ```text
 .
-├── stage1_merge_chatml_all.py
-├── stage1_temporal_document_sort.py
-├── stage2_core_fact_extraction_verification.py
-├── stage3_4_fewshot_professor_style_agents.py
+├── pipeline/
+│   ├── __init__.py
+│   ├── stage1_merge_chatml_all.py
+│   ├── stage2_temporal_document_sort.py
+│   ├── stage3_core_fact_extraction_verification.py
+│   └── stage4_5_fewshot_professor_style_agents.py
 ├── stage3_extract_professor_styles_ollama.py
 ├── stage4_generate_professor_style_notes.py
+├── streamlit_app.py
+├── web_pipeline.py
+├── mainfigure.png
 ├── requirements.txt
 ├── docs/
 │   ├── pipeline.md
@@ -119,33 +94,33 @@ ollama list
 
 ## Quick Start
 
-### Stage 1A: merge raw XLSX files
+### Stage 1: merge raw XLSX files
 
 ```bash
-python stage1_merge_chatml_all.py \
+python pipeline/stage1_merge_chatml_all.py \
   --input-dir /path/to/chatml_All \
   --output-csv outputs/chatml_All_grouped_professor_patient.csv
 ```
 
-### Stage 1B: document-level temporal sorting
+### Stage 2: document-level temporal sorting
 
 ```bash
-python stage1_temporal_document_sort.py \
+python pipeline/stage2_temporal_document_sort.py \
   --input-csv outputs/chatml_All_grouped_professor_patient.csv \
   --output-csv outputs/chatml_All_document_temporal_sorted.csv \
-  --output-json outputs/stage1_temporal_sort_metadata.json \
+  --output-json outputs/stage2_temporal_sort_metadata.json \
   --skip-json \
   --max-patients 0
 ```
 
-### Stage 2: fact extraction and verification
+### Stage 3: fact extraction and verification
 
 Smoke test:
 
 ```bash
-python stage2_core_fact_extraction_verification.py \
+python pipeline/stage3_core_fact_extraction_verification.py \
   --input-csv outputs/chatml_All_document_temporal_sorted.csv \
-  --output-csv outputs/stage2_10rows_fact_extraction_qwen35_9b.csv \
+  --output-csv outputs/stage3_10rows_fact_extraction_qwen35_9b.csv \
   --extractor-model qwen3.5:9b \
   --verifier-model qwen3.5:9b \
   --max-patients 10 \
@@ -158,9 +133,9 @@ python stage2_core_fact_extraction_verification.py \
 Full run:
 
 ```bash
-python stage2_core_fact_extraction_verification.py \
+python pipeline/stage3_core_fact_extraction_verification.py \
   --input-csv outputs/chatml_All_document_temporal_sorted.csv \
-  --output-csv outputs/stage2_all_fact_extraction_qwen35_9b.csv \
+  --output-csv outputs/stage3_all_fact_extraction_qwen35_9b.csv \
   --extractor-model qwen3.5:9b \
   --verifier-model qwen3.5:9b \
   --max-patients 0 \
@@ -173,17 +148,17 @@ python stage2_core_fact_extraction_verification.py \
   --skip-readable-report
 ```
 
-### Stage 3/4: few-shot style extraction and note generation
+### Stage 4/5: few-shot style extraction and note generation
 
-The current default Stage 3/4 script is:
+The current default Stage 4/5 script is:
 
 ```text
-stage3_4_fewshot_professor_style_agents.py
+pipeline/stage4_5_fewshot_professor_style_agents.py
 ```
 
 It reads:
 
-- `--facts_csv`: Stage 2 output CSV with row-isolated facts.
+- `--facts_csv`: Stage 3 output CSV with row-isolated facts.
 - `--reference_csv`: reference output examples normalized to columns
   `Professor_ID`, `수술ID`, `Input`, and `Output`.
 
@@ -210,14 +185,14 @@ share an opening line such as:
 <|section_start|>Description <- 소견<|section_end|>
 ```
 
-the Stage 3/4 agent detects it as a common style wrapper and asks the generator
+the Stage 4/5 agent detects it as a common style wrapper and asks the generator
 to preserve it exactly.
 
-Smoke test using Stage 2 facts and five reference examples:
+Smoke test using Stage 3 facts and five reference examples:
 
 ```bash
-python stage3_4_fewshot_professor_style_agents.py \
-  --facts_csv outputs/stage2_verified_facts.csv \
+python pipeline/stage4_5_fewshot_professor_style_agents.py \
+  --facts_csv outputs/stage3_verified_facts.csv \
   --reference_csv outputs/reference_examples.csv \
   --output_csv outputs/generated_notes.csv \
   --audit_jsonl outputs/generated_notes_audit.jsonl \
@@ -232,8 +207,8 @@ python stage3_4_fewshot_professor_style_agents.py \
 Separate models can be used for style extraction and note generation:
 
 ```bash
-python stage3_4_fewshot_professor_style_agents.py \
-  --facts_csv outputs/stage2_verified_facts.csv \
+python pipeline/stage4_5_fewshot_professor_style_agents.py \
+  --facts_csv outputs/stage3_verified_facts.csv \
   --reference_csv outputs/reference_examples.csv \
   --output_csv outputs/generated_notes.csv \
   --audit_jsonl outputs/generated_notes_audit.jsonl \
@@ -247,8 +222,8 @@ python stage3_4_fewshot_professor_style_agents.py \
 Dry run without LLM generation:
 
 ```bash
-python stage3_4_fewshot_professor_style_agents.py \
-  --facts_csv outputs/stage2_verified_facts.csv \
+python pipeline/stage4_5_fewshot_professor_style_agents.py \
+  --facts_csv outputs/stage3_verified_facts.csv \
   --reference_csv outputs/reference_examples.csv \
   --output_csv outputs/generated_notes_dryrun.csv \
   --audit_jsonl outputs/generated_notes_dryrun_audit.jsonl \
@@ -261,7 +236,7 @@ python stage3_4_fewshot_professor_style_agents.py \
 In dry-run mode, `generated_note` is a placeholder and
 `validation_status=dry_run`.
 
-Useful Stage 3/4 options:
+Useful Stage 4/5 options:
 
 | Option | Meaning |
 | --- | --- |
@@ -275,7 +250,7 @@ Useful Stage 3/4 options:
 | `--keep_thinking` | Do not strip `<think>` blocks; normally not recommended |
 | `--ollama_host <url>` | Use a non-default Ollama server |
 
-### Legacy split Stage 3 and Stage 4 scripts
+### Legacy split style and generation scripts
 
 The older split scripts are still present:
 
@@ -295,7 +270,7 @@ python stage3_extract_professor_styles_ollama.py \
   --target_style_chars 1600
 
 python stage4_generate_professor_style_notes.py \
-  --facts_csv outputs/stage2_all_fact_extraction_qwen35_9b.csv \
+  --facts_csv outputs/stage3_all_fact_extraction_qwen35_9b.csv \
   --styles_xlsx outputs/Professor_Styles_extracted.xlsx \
   --output_csv outputs/professor_style_outpatient_notes.csv \
   --audit_jsonl outputs/professor_style_outpatient_notes_audit.jsonl \
@@ -303,7 +278,7 @@ python stage4_generate_professor_style_notes.py \
   --strict_validation
 ```
 
-## Stage 2 Verification Policy
+## Stage 3 Verification Policy
 
 Current pass criteria are intentionally balanced:
 
@@ -318,9 +293,9 @@ Current pass criteria are intentionally balanced:
 Minor missing details such as baseline weight, BMI, or routine LFT values do not
 block a PASS unless they are clinically central to the record.
 
-## Stage 3/4 Few-Shot Style Policy
+## Stage 4/5 Few-Shot Style Policy
 
-The active Stage 3/4 agent is optimized for professor-specific
+The active Stage 4/5 agent is optimized for professor-specific
 **content-selection style**, not only surface wording. It asks Ollama to infer a
 style profile from the selected reference output examples, while deterministic
 guards capture common wrappers such as a shared first line.
@@ -341,9 +316,9 @@ The extracted `style_prompt` must not contain fixed patient-specific facts from
 sample notes. It should use placeholders such as `[diagnosis]`, `[operation]`,
 `[date]`, and `[status]`.
 
-## Stage 3/4 Generation Policy
+## Stage 4/5 Generation Policy
 
-The generation half of Stage 3/4 is designed for safety-critical, fact-grounded
+The generation half of Stage 4/5 is designed for safety-critical, fact-grounded
 clinical document generation. Important rules:
 
 - Each row is treated as an isolated fact bundle.
@@ -361,7 +336,7 @@ clinical document generation. Important rules:
   requested output style: main diagnosis or R/O diagnosis, main operation or
   procedure, date, and short post-op/follow-up/status phrase.
 
-Stage 3/4 strips local reasoning-model artifacts such as `<think>...</think>`
+Stage 4/5 strips local reasoning-model artifacts such as `<think>...</think>`
 from generated output unless `--keep_thinking` is explicitly used. Dry-run
 outputs are marked with `validation_status=dry_run` so placeholders are not
 mistaken for generated clinical notes.
@@ -395,7 +370,7 @@ model selection; they are not a guarantee of clinical correctness.
 The following summary table compares four legacy Stage 4 prompt/style-generation
 versions on the 21-professor evaluation set. The evaluation is row-level over
 439 rows derived from the 21-professor sample set. Treat this as historical
-context for prompt behavior; the current web path uses the unified Stage 3/4
+context for prompt behavior; the current web path uses the unified Stage 4/5
 few-shot agent.
 
 | Version | Overall | Reference alignment | Entity F1 | Entity precision | Entity recall | Brevity | Length ratio | >=50 | <50 | Interpretation |
@@ -418,7 +393,7 @@ Historical model-selection rule for the legacy split Stage 4 flow:
 
 ## Clinical Guardrails
 
-Stage 2 includes deterministic checks for high-risk extraction details:
+Stage 3 includes deterministic checks for high-risk extraction details:
 
 - PFT mapping: FVC/FEV1/FEV1-FVC values must not be swapped.
 - Operative outcome: complete enucleation and mucosal status are preserved.
@@ -429,7 +404,7 @@ Stage 2 includes deterministic checks for high-risk extraction details:
 - Prompt-leak protection: facts that appear copied from prompt guidance but are
   absent from the source chunk are removed.
 
-Stage 3/4 adds generated-note validation checks for suspicious unsupported phrases,
+Stage 4/5 adds generated-note validation checks for suspicious unsupported phrases,
 dates, numbers, medical terms, possible style-prompt leakage, and output
 truncation. These validation warnings are screening signals, not a guarantee of
 clinical correctness. Any generated medical record should be reviewed before

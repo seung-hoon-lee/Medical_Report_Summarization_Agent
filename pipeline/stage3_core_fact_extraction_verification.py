@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Stage 2: core fact extraction with recursive verification.
+Stage 3: core fact extraction with recursive verification.
 
-Input is the Stage 1 document-sorted CSV:
+Input is the Stage 2 document-sorted CSV:
   Professor_ID | 수술ID | Input | Sorted_Timeline
 
 For each document chunk in Sorted_Timeline, Agent 1 extracts structured core
@@ -23,11 +23,11 @@ from typing import Any
 import pandas as pd
 from tqdm import tqdm
 
-from stage1_temporal_document_sort import split_source_documents
+from stage2_temporal_document_sort import split_source_documents
 
 
 DEFAULT_INPUT_CSV = Path("/root/seunghoon/project/outputs/chatml_All_document_temporal_sorted.csv")
-DEFAULT_OUTPUT_CSV = Path("/root/seunghoon/project/outputs/stage2_first_row_fact_extraction.csv")
+DEFAULT_OUTPUT_CSV = Path("/root/seunghoon/project/outputs/stage3_first_row_fact_extraction.csv")
 REQUIRED_COLUMNS = ["Professor_ID", "수술ID", "Input", "Sorted_Timeline"]
 ALLOWED_CATEGORIES = {
     "Primary Diagnosis",

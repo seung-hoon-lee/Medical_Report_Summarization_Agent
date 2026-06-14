@@ -395,7 +395,7 @@ def write_outputs(
         output_json.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "metadata": {
-                "stage": "stage1_temporal_document_sort",
+                "stage": "stage2_temporal_document_sort",
                 "input_csv": str(input_csv),
                 "num_patients": len(results),
                 "llm_used": False,

@@ -617,7 +617,7 @@ def python_command(script_name: str, *args: str) -> list[str]:
 
 def run_stage1(paths: RunPaths, *, max_patients: int = 0) -> CommandResult:
     command = python_command(
-        "stage1_temporal_document_sort.py",
+        "pipeline/stage2_temporal_document_sort.py",
         "--input-csv",
         str(paths.input_csv),
         "--output-csv",
@@ -642,7 +642,7 @@ def run_stage2(
     ollama_host: str | None = None,
 ) -> CommandResult:
     command = python_command(
-        "stage2_core_fact_extraction_verification.py",
+        "pipeline/stage3_core_fact_extraction_verification.py",
         "--input-csv",
         str(paths.stage1_csv),
         "--output-csv",
@@ -763,7 +763,7 @@ def run_stage34(
     ollama_host: str | None = None,
 ) -> CommandResult:
     command = python_command(
-        "stage3_4_fewshot_professor_style_agents.py",
+        "pipeline/stage4_5_fewshot_professor_style_agents.py",
         "--facts_csv",
         str(facts_csv),
         "--reference_csv",

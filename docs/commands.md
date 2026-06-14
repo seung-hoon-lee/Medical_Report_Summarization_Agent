@@ -13,10 +13,10 @@ python -m pip install -r requirements.txt
 ollama pull qwen3.5:9b
 ```
 
-## Stage 1A: Merge XLSX Files
+## Stage 1: Merge XLSX Files
 
 ```bash
-python stage1_merge_chatml_all.py \
+python pipeline/stage1_merge_chatml_all.py \
   --input-dir /path/to/chatml_All \
   --output-csv outputs/chatml_All_grouped_professor_patient.csv
 ```
@@ -31,25 +31,25 @@ Arguments:
 | `--keep-empty-output` / `--no-keep-empty-output` | enabled | Keep rows with empty `Output` |
 | `--sort` / `--no-sort` | enabled | Sort by `Professor_ID`, `수술ID` |
 
-## Stage 1B: Document Temporal Sorting
+## Stage 2: Document Temporal Sorting
 
 First row smoke test:
 
 ```bash
-python stage1_temporal_document_sort.py \
+python pipeline/stage2_temporal_document_sort.py \
   --input-csv outputs/chatml_All_grouped_professor_patient.csv \
-  --output-csv outputs/stage1_first_row_temporal_sort.csv \
-  --output-json outputs/stage1_first_row_temporal_sort.json \
+  --output-csv outputs/stage2_first_row_temporal_sort.csv \
+  --output-json outputs/stage2_first_row_temporal_sort.json \
   --max-patients 1
 ```
 
 Full dataset:
 
 ```bash
-python stage1_temporal_document_sort.py \
+python pipeline/stage2_temporal_document_sort.py \
   --input-csv outputs/chatml_All_grouped_professor_patient.csv \
   --output-csv outputs/chatml_All_document_temporal_sorted.csv \
-  --output-json outputs/stage1_temporal_sort_metadata.json \
+  --output-json outputs/stage2_temporal_sort_metadata.json \
   --skip-json \
   --max-patients 0
 ```
@@ -58,21 +58,21 @@ Arguments:
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--input-csv` | `outputs/chatml_All_grouped_professor_patient.csv` | Stage 1A merged CSV |
-| `--output-csv` | `outputs/stage1_first_row_temporal_sort.csv` | Compact CSV with `Sorted_Timeline` |
-| `--output-json` | `outputs/stage1_first_row_temporal_sort.json` | Optional metadata-rich JSON |
+| `--input-csv` | `outputs/chatml_All_grouped_professor_patient.csv` | Stage 1 merged CSV |
+| `--output-csv` | `outputs/stage2_first_row_temporal_sort.csv` | Compact CSV with `Sorted_Timeline` |
+| `--output-json` | `outputs/stage2_first_row_temporal_sort.json` | Optional metadata-rich JSON |
 | `--skip-json` | false | Skip JSON output for full-dataset runs |
 | `--start-index` | `0` | First row index |
 | `--max-patients` | `1` | Number of rows. Use `0` for all rows |
 
-## Stage 2: Core Fact Extraction and Verification
+## Stage 3: Core Fact Extraction and Verification
 
 First row:
 
 ```bash
-python stage2_core_fact_extraction_verification.py \
+python pipeline/stage3_core_fact_extraction_verification.py \
   --input-csv outputs/chatml_All_document_temporal_sorted.csv \
-  --output-csv outputs/stage2_first_row_fact_extraction_qwen35_9b.csv \
+  --output-csv outputs/stage3_first_row_fact_extraction_qwen35_9b.csv \
   --extractor-model qwen3.5:9b \
   --verifier-model qwen3.5:9b \
   --max-patients 1 \
@@ -85,9 +85,9 @@ python stage2_core_fact_extraction_verification.py \
 10-row smoke test:
 
 ```bash
-python stage2_core_fact_extraction_verification.py \
+python pipeline/stage3_core_fact_extraction_verification.py \
   --input-csv outputs/chatml_All_document_temporal_sorted.csv \
-  --output-csv outputs/stage2_10rows_fact_extraction_qwen35_9b.csv \
+  --output-csv outputs/stage3_10rows_fact_extraction_qwen35_9b.csv \
   --extractor-model qwen3.5:9b \
   --verifier-model qwen3.5:9b \
   --max-patients 10 \
@@ -100,9 +100,9 @@ python stage2_core_fact_extraction_verification.py \
 Full dataset:
 
 ```bash
-python stage2_core_fact_extraction_verification.py \
+python pipeline/stage3_core_fact_extraction_verification.py \
   --input-csv outputs/chatml_All_document_temporal_sorted.csv \
-  --output-csv outputs/stage2_all_fact_extraction_qwen35_9b.csv \
+  --output-csv outputs/stage3_all_fact_extraction_qwen35_9b.csv \
   --extractor-model qwen3.5:9b \
   --verifier-model qwen3.5:9b \
   --max-patients 0 \
@@ -119,8 +119,8 @@ Arguments:
 
 | Argument | Default | Description |
 | --- | --- | --- |
-| `--input-csv` | `outputs/chatml_All_document_temporal_sorted.csv` | Stage 1B output |
-| `--output-csv` | `outputs/stage2_first_row_fact_extraction.csv` | Stage 2 output CSV |
+| `--input-csv` | `outputs/chatml_All_document_temporal_sorted.csv` | Stage 2 output |
+| `--output-csv` | `outputs/stage3_first_row_fact_extraction.csv` | Stage 3 output CSV |
 | `--extractor-model` | `qwen3.5:9b` | Agent 1 Ollama model |
 | `--verifier-model` | `qwen3.5:9b` | Agent 2 Ollama model |
 | `--temperature` | `0.0` | Deterministic generation |
@@ -139,9 +139,8 @@ Arguments:
 
 ## Recommended Batch Strategy
 
-1. Run Stage 1A once.
-2. Run Stage 1B on the full dataset with `--skip-json`.
-3. Run Stage 2 on 10 rows.
+1. Run Stage 1 once.
+2. Run Stage 2 on the full dataset with `--skip-json`.
+3. Run Stage 3 on 10 rows.
 4. Inspect `Stage2_Status`, `Stage2_Approved`, and unresolved issues.
-5. Run Stage 2 full dataset with `--skip-readable-report`.
-
+5. Run Stage 3 full dataset with `--skip-readable-report`.

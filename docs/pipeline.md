@@ -2,12 +2,12 @@
 
 This document describes the current medical report summarization pipeline.
 
-## Stage 1A: XLSX Merge
+## Stage 1: XLSX Merge
 
 Script:
 
 ```text
-stage1_merge_chatml_all.py
+pipeline/stage1_merge_chatml_all.py
 ```
 
 Purpose:
@@ -31,12 +31,12 @@ Output columns:
 
 No LLM is used in this stage.
 
-## Stage 1B: Document-Level Temporal Sorting
+## Stage 2: Document-Level Temporal Sorting
 
 Script:
 
 ```text
-stage1_temporal_document_sort.py
+pipeline/stage2_temporal_document_sort.py
 ```
 
 Purpose:
@@ -62,12 +62,12 @@ Important distinction:
 
 No LLM is used in this stage.
 
-## Stage 2: Core Fact Extraction and Verification
+## Stage 3: Core Fact Extraction and Verification
 
 Script:
 
 ```text
-stage2_core_fact_extraction_verification.py
+pipeline/stage3_core_fact_extraction_verification.py
 ```
 
 Purpose:
@@ -108,7 +108,7 @@ Worst case with `max_iterations=2`:
 4 chunks x 2 iterations x 2 agents = 16 LLM calls
 ```
 
-## Stage 2 Fact Categories
+## Stage 3 Fact Categories
 
 Allowed categories:
 
@@ -180,4 +180,3 @@ High-risk facts are checked with rule-based logic in addition to LLM verificatio
 - Prompt-leak filtering:
   - Facts not supported by the chunk are removed if they appear to originate
     from prompt guidance.
-
