@@ -52,6 +52,19 @@ using only that row's Stage 3 facts.
 │   ├── web_interface.png
 │   └── .streamlit/
 │       └── config.toml
+├── experiments/                # paper baselines + ours (note generation)
+│   ├── exp1_raw_to_note.py
+│   ├── exp2_raw_fact_to_note.py
+│   ├── exp3_chunk_fact_to_note.py
+│   ├── exp4_iterative_fact_to_note.py
+│   ├── exp5_ours_fewshot_style.py
+│   ├── run_exp.sh
+│   └── run_exp_parallel.sh
+├── eval/                       # LLM-as-a-Judge tables (Table 1/2/3)
+│   ├── eval_table1_main.py
+│   ├── eval_table2_ablation.py
+│   ├── eval_table3_error_analysis.py
+│   └── run_eval.sh
 ├── mainfigure.png
 ├── requirements.txt
 ├── docs/
@@ -333,53 +346,142 @@ mistaken for generated clinical notes.
 
 ## LLM-as-a-Judge Evaluation
 
-The historical evaluation uses a reference-based LLM-as-a-Judge style scoring
-protocol. For each case, the generated outpatient note is compared against the
-real reference `Output` note. The original `Input` record is used as supporting
-context to check whether the generated content is grounded in the source record.
+We compare five note-generation pipelines with an LLM-as-a-Judge protocol. Each
+generated outpatient note is scored against two anchors: the raw `Input` record
+(for faithfulness / hallucination) and the professor's real `Output` note (for
+completeness and style). The three result tables below are produced by the
+scripts in [`eval/`](eval/).
 
-All reported scores except `Length ratio` are normalized to a 0-100 scale, where
-higher is better. These scores are proxy evaluation metrics for development and
-model selection; they are not a guarantee of clinical correctness.
+**Setup.**
+
+- **Methods (input form → note).** All five share the same generator
+  (`qwen3.6:35b`); they differ only in what reaches the note agent.
+
+  | Method | Fact Extraction | Iterative Agent | Few-shot Style |
+  | --- | :---: | :---: | :---: |
+  | Raw-to-Note | ✗ | ✗ | ✗ |
+  | Raw-to-Fact-to-Note | ✓ | ✗ | ✗ |
+  | Chunk-to-Fact-to-Note | ✓ | ✗ | ✗ |
+  | Iterative Multi-Agent Fact-to-Note | ✓ | ✓ | ✗ |
+  | **Ours** | ✓ | ✓ | ✓ |
+
+  `Ours` = iterative-verified facts + 3-shot deterministic few-shot professor style.
+
+- **Judge.** Local `gpt-oss:120b` via Ollama — a different model family from the
+  generator, which limits self-preference bias. Temperature 0, fixed seed, all
+  judge I/O cached so re-runs are free.
+- **Sample.** 210 records (10 per professor × 21 professors), seeded and
+  identical across every method and every table.
+- **Faithfulness scope.** Atomic clinical claims are verified against the source
+  record (FActScore / RAGAS style). Documentation scaffolding — section headers,
+  visit-type labels (`postop 1st visit`), and generic disposition boilerplate
+  (`OPD f/u`) — is explicitly excluded from claim extraction, because it is
+  professor house style, not a verifiable patient-specific assertion.
 
 ### Metric definitions
 
-| Metric | Meaning |
-| --- | --- |
-| `Overall` | Composite 0-100 score summarizing reference alignment, entity matching, compactness, and grounding behavior. |
-| `Reference alignment` | How closely the generated note matches the real reference outpatient note in wording, structure, ordering, and note-like style. |
-| `Entity F1` | Harmonic-style summary of entity precision and recall for clinically important anchors such as diagnosis, procedure, date, pathology, treatment, status, and numeric values. |
-| `Entity precision` | Among entities written in the generated note, the proportion that also appears to be supported by the reference note. Low precision usually indicates over-generation. |
-| `Entity recall` | Among important entities in the reference note, the proportion recovered by the generated note. Low recall usually indicates over-compression or missing core anchors. |
-| `Brevity` | Compactness score relative to the reference outpatient note. Higher scores indicate less operative-summary over-generation and better note-length control. |
-| `Length ratio` | Generated-note length divided by reference-note length. A value near `1.0x` is ideal; values above `1.0x` indicate longer outputs, while values below `1.0x` indicate stronger compression. |
-| `>=50` / `<50` | Number of evaluated cases above or below a 50-point case-level `Overall` score threshold. |
+| Metric | Meaning | Better |
+| --- | --- | :---: |
+| `Faithful Pass` | % of notes with a faithfulness Likert ≥ 4 (5 = every claim grounded in the source; 3 = borderline; ≤ 2 = at least one unsupported claim). | ↑ |
+| `Faithful Borderline` | % of notes scored exactly 3 (no clear hallucination, but ≥ 1 only weakly supported claim). Reported separately. | — |
+| `Hallucination-free` | % of notes with zero unsupported clinical claims. | ↑ |
+| `Unsupported / Note` | Mean number of unsupported clinical claims per note. | ↓ |
+| `Critical Complete` | % of notes covering the professor note's critical facts. *Strict* = all present; *lenient* = none fully absent (partial allowed). | ↑ |
+| `Style Win` | Pairwise, position-swap-debiased style match against a fixed opponent, judged against the professor's *other* reference notes (no leakage of the evaluated record). Reported as % of battles the row wins. | ↑ |
+| `Missing / Note` | Mean number of GT critical facts absent from the note (error analysis). | ↓ |
+| `Patient-mixing` | Mean unsupported claims that plausibly belong to a different patient/encounter. | ↓ |
 
-### Prompt-version leaderboard
+### Table 1 — Main comparison
 
-The following summary table compares four legacy Stage 4 prompt/style-generation
-versions on the 21-professor evaluation set. The evaluation is row-level over
-439 rows derived from the 21-professor sample set. Treat this as historical
-context for prompt behavior; the current web path uses the unified Stage 4/5
-few-shot agent.
+Style Win is judged against `Ours`, so `Ours` is the reference row ("—"); the
+baseline values are the share of style battles each baseline wins against `Ours`.
 
-| Version | Overall | Reference alignment | Entity F1 | Entity precision | Entity recall | Brevity | Length ratio | >=50 | <50 | Interpretation |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `v1` | **58.65** | **49.19** | **49.27** | 52.68 | **56.96** | 76.43 | 1.67x | **303** | **136** | Best default version overall; strongest balance between recall and compactness. |
-| `v2` | 56.14 | 46.35 | 45.83 | 49.18 | 54.26 | 74.14 | 1.99x | 288 | 151 | Slight regression from v1; useful only for selected professors. |
-| `v3` | 44.74 | 34.92 | 30.81 | 34.66 | 45.88 | 61.76 | 2.91x | 105 | 334 | Not recommended; tends to over-generate and drift toward operative-summary style. |
-| `v4` | 56.25 | 46.37 | 45.03 | **56.07** | 45.54 | **77.31** | **0.89x** | 296 | 143 | Strongest compression and precision, but lower recall; useful for over-generating professors. |
+| Method | Faithful Pass ↑ | Hallu-free ↑ | Unsup/Note ↓ | Critical Complete strict / lenient ↑ | Style Win vs Ours ↑ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Raw-to-Note | 63.3 | 71.9 | 0.55 | 14.8 / 25.2 | 2.1 |
+| Raw-to-Fact-to-Note | 63.8 | 73.3 | 0.46 | 11.4 / 18.1 | 0.0 |
+| Chunk-to-Fact-to-Note | 41.9 | 52.4 | 0.86 | 13.8 / 22.4 | 0.5 |
+| Iterative Multi-Agent Fact-to-Note | 43.3 | 52.4 | 0.90 | 13.3 / 22.9 | 0.5 |
+| **Ours** | **78.6** | **82.4** | **0.20** | **20.5 / 36.7** | — |
 
-Historical prompt-version notes for that benchmark:
+**Interpretation.**
 
-- Use `v1` as the default legacy Stage 4 prompt version.
-- Consider `v4` for professors whose outputs are consistently over-generated by
-  `v1`, especially when brevity and entity precision are more important than
-  recall.
-- Do not use `v3` as a default prompt version.
-- Treat the leaderboard as a development benchmark. Final clinical validation
-  should include physician review of factual correctness, omission errors,
-  over-generation, and professor-style match.
+- `Ours` is best on every axis: most faithful, most hallucination-free, fewest
+  unsupported claims, most complete, and it wins **97.9–100%** of style battles
+  against every baseline (each baseline wins ≤ 2.1%).
+- **Fact extraction alone does not improve faithfulness.** `Chunk-` and
+  `Iterative-Fact-to-Note` are *less* faithful than `Raw-to-Note` (42–43% vs 63%
+  pass), because chunked multi-document extraction surfaces more facts —
+  including noise — and a style-free generator writes all of them.
+- **The style stage is the decisive step.** `Iterative` and `Ours` consume the
+  *same* facts; adding few-shot style raises Faithful Pass from 43% to 79% and
+  cuts Unsupported/Note from 0.90 to 0.20. The style prompt acts as a
+  content-selection filter, not just cosmetics.
+
+### Table 2 — Few-shot style ablation
+
+All rows consume identical iterative-verified facts and differ only in the
+few-shot reference configuration. Style Win here is judged against `No few-shot`.
+
+| Few-shot setting | Faithful Pass ↑ | Hallu-free ↑ | Unsup/Note ↓ | Critical Complete strict / lenient ↑ | Style Win ↑ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| No few-shot | 43.3 | 52.4 | 0.90 | 13.3 / 22.9 | — |
+| 3-shot Random | 81.0 | 85.7 | 0.20 | 16.7 / 30.0 | 100.0 |
+| **3-shot Deterministic (Ours)** | 78.6 | 82.4 | 0.20 | **20.5 / 36.7** | 99.5 |
+| 5-shot Random | **83.8** | **90.0** | **0.11** | 21.4 / 36.2 | 100.0 |
+| 5-shot Deterministic | 74.3 | 81.0 | 0.23 | 19.1 / 36.2 | 100.0 |
+
+**Interpretation.**
+
+- Few-shot style is the dominant factor: every configuration roughly doubles
+  Faithful Pass over `No few-shot` (43% → 74–84%) and wins ≈ 100% of style
+  battles against it.
+- `Ours` uses **3-shot Deterministic**: it has the best completeness of all
+  configurations and is reproducible (length-stratified, seed-independent).
+  5-shot Random scores highest on faithfulness but depends on a single random
+  seed, so the deterministic setting is the safer headline configuration.
+
+### Table 3 — Error analysis
+
+Derived from the Table 1 faithfulness/completeness verdicts (no extra judge
+calls). Every column: lower is better.
+
+| Method | Unsup/Note ↓ | Notes w/ unsupported ↓ | Missing/Note ↓ | Notes w/ missing ↓ | Patient-mixing ↓ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Raw-to-Note | 0.55 | 28.1% | 1.80 | 74.8% | 0.09 |
+| Raw-to-Fact-to-Note | 0.46 | 26.2% | 2.40 | 81.9% | 0.12 |
+| Chunk-to-Fact-to-Note | 0.86 | 47.1% | 1.80 | 77.6% | 0.07 |
+| Iterative Multi-Agent Fact-to-Note | 0.90 | 47.1% | 1.78 | 77.1% | 0.07 |
+| **Ours** | **0.20** | **17.1%** | 2.25 | **63.3%** | **0.00** |
+
+**Interpretation.**
+
+- `Ours` has the fewest unsupported claims (0.20, in only 17% of notes) and is the
+  **only method with zero patient-mixing** — chunked extraction's cross-document
+  contamination is removed by style-driven selection.
+- `Chunk-` and `Iterative-Fact-to-Note` carry an unsupported claim in **47%** of
+  notes (the most of any method), confirming that extraction without selection
+  injects noise.
+- Completeness is the shared weak spot: every method omits ~2 critical facts per
+  note. `Ours` has the smallest share of notes with any omission (63%), but
+  because it writes compact notes it has a slightly higher per-note miss count
+  when it *does* omit. Use Critical Complete (lenient) as the headline and treat
+  absolute completeness as a known limitation.
+
+> These judge scores are development / benchmark metrics, not a guarantee of
+> clinical correctness. Final validation requires physician review of factual
+> accuracy, omissions, over-generation, and professor-style match.
+
+Reproduce (from `eval/`):
+
+```bash
+# local judge, free
+BACKEND=ollama JUDGE_MODEL=gpt-oss:120b SAMPLE=10 bash run_eval.sh
+
+# OpenAI judge (optional cross-check)
+export OPENAI_API_KEY=sk-...
+JUDGE_MODEL=gpt-4.1-mini bash run_eval.sh
+```
 
 ## Clinical Guardrails
 
